@@ -84,7 +84,6 @@ func getKnownFlipBitServices() {
 func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes map[string]FBNode) (map[string]FBEntry) {
 	removedList := make(map[string]FBEntry)
 
-	fmt.Printf("There are %d services in the cluster\n", len(services.Items))
 	for i := 0; i < len(services.Items); i++ {
 		ports := make([]int32,0)
 		for j := 0; j < len(services.Items[i].Spec.Ports); j++ {
@@ -133,6 +132,7 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 }
 
 func displayServices(entries map[string]FBEntry) {
+	fmt.Printf("There are %d services in the cluster\n", len(services.Items))
 	for key, value := range entries {
 		fmt.Printf("Key: %s - Service name is %s, namespace is %s, ports are: ", key, value.Name, value.Namespace)
 		for i := 0; i < len(value.NodePorts); i++ {

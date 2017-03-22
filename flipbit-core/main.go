@@ -112,6 +112,12 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 			}
 		}
 
+		for j := 0; j < len(hosts); j++ {
+			tempNode := nodes[hosts[j]]
+			tempNode.Services++
+			nodes[hosts[j]] = tempNode
+		}
+
 		entries[services.Items[i].Name + "|" + services.Items[i].Namespace] = FBEntry{
 			Name: services.Items[i].Name,
 			Namespace: services.Items[i].Namespace,
@@ -120,6 +126,7 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 			Changed: true,
 			Hosts: hosts,
 		}
+
 	}
 
 	return removedList

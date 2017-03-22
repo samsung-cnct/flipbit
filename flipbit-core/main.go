@@ -132,7 +132,7 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 }
 
 func displayServices(entries map[string]FBEntry) {
-	fmt.Printf("There are %d services in the cluster\n", len(services.Items))
+	fmt.Printf("There are %d services in the cluster\n", len(entries))
 	for key, value := range entries {
 		fmt.Printf("Key: %s - Service name is %s, namespace is %s, ports are: ", key, value.Name, value.Namespace)
 		for i := 0; i < len(value.NodePorts); i++ {

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"time"
+	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -11,42 +12,26 @@ import (
 	"k8s.io/client-go/pkg/api/v1"
 	"math/rand"
 	"sort"
+	"github.com/samsung-cnct/flipbit/libflipbit"
+	"encoding/json"
+	"net/http"
+	"bytes"
 )
 
-type FBEntry struct {
-	Name string
-	Namespace string
-	NodePorts []int32
-	Hosts []string
-	LoadBalancers []string
-	Remained bool
-	Changed bool
-}
 
-type FBNode struct {
-	Address string
-	Services int32
-}
 
-type FBLBHost struct {
-	Chance int
-	Host string
-}
 
-type FBLBHosts []FBLBHost
-
-type LoadBalancer struct {
-	Address string
-}
 
 func main() {
 	k8sApiConfig := getK8SAPIConfig()
 	var services *v1.ServiceList
-	var nodes map[string]FBNode
+	var nodes map[string]libflipbit.Node
 	var err error
 
-//	var lbs []*LoadBalancer
-	entries := make(map[string]FBEntry)
+	loadbalancers := make(libflipbit.LoadBalancers,0)
+	loadbalancers = append(loadbalancers, libflipbit.LoadBalancer{URL:"http://localhost:8080/update", Timeout:10})
+
+	entries := make(map[string]libflipbit.Entry)
 
 
 	// creates the clientset
@@ -67,6 +52,8 @@ func main() {
 		// Process services
 		_ = processServices(services, entries, nodes)
 
+		updateLoadBalancers(entries, loadbalancers)
+
 		displayServices(entries)
 		displayNodes(nodes)
 
@@ -81,8 +68,8 @@ func getKnownFlipBitServices() {
 	return
 }
 
-func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes map[string]FBNode) (map[string]FBEntry) {
-	removedList := make(map[string]FBEntry)
+func processServices(services *v1.ServiceList, entries map[string]libflipbit.Entry, nodes map[string]libflipbit.Node) (map[string]libflipbit.Entry) {
+	removedList := make(map[string]libflipbit.Entry)
 
 	for i := 0; i < len(services.Items); i++ {
 		ports := make([]int32,0)
@@ -98,9 +85,9 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 				hosts = append(hosts, key)
 			}
 		} else {
-			randomhosts := make(FBLBHosts,0)
+			randomhosts := make(libflipbit.LBHosts,0)
 			for key := range nodes {
-				randomhosts = append(randomhosts, FBLBHost{ Chance: rand.Int(), Host: key})
+				randomhosts = append(randomhosts, libflipbit.LBHost{ Chance: rand.Int(), Host: key})
 				if len(randomhosts) > lbLimit {
 					sort.Sort(randomhosts)
 					randomhosts = randomhosts[1:]
@@ -117,7 +104,7 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 			nodes[hosts[j]] = tempNode
 		}
 
-		entries[services.Items[i].Name + "|" + services.Items[i].Namespace] = FBEntry{
+		entries[services.Items[i].Name + "|" + services.Items[i].Namespace] = libflipbit.Entry{
 			Name: services.Items[i].Name,
 			Namespace: services.Items[i].Namespace,
 			NodePorts: ports,
@@ -131,7 +118,26 @@ func processServices(services *v1.ServiceList, entries map[string]FBEntry, nodes
 	return removedList
 }
 
-func displayServices(entries map[string]FBEntry) {
+func updateLoadBalancers(entries map[string]libflipbit.Entry, loadBalancers libflipbit.LoadBalancers) {
+	var wg sync.WaitGroup
+	wg.Add(len(loadBalancers))
+	for _, loadBalancer := range loadBalancers {
+		go func() {
+			defer wg.Done()
+			updateLoadBalancer(entries, loadBalancer)
+		}()
+	}
+	wg.Wait()
+}
+
+func updateLoadBalancer(entries map[string]libflipbit.Entry, loadBalancer libflipbit.LoadBalancer) {
+	dataBuffer := new(bytes.Buffer)
+	json.NewEncoder(dataBuffer).Encode(entries)
+	client := http.Client{ Timeout: time.Duration(time.Duration(loadBalancer.Timeout) * time.Second)}
+	client.Post(loadBalancer.URL,"application/json; charset=utf-8", dataBuffer)
+}
+
+func displayServices(entries map[string]libflipbit.Entry) {
 	fmt.Printf("There are %d services in the cluster\n", len(entries))
 	for key, value := range entries {
 		fmt.Printf("Key: %s - Service name is %s, namespace is %s, ports are: ", key, value.Name, value.Namespace)
@@ -152,6 +158,7 @@ func displayServices(entries map[string]FBEntry) {
 	}
 
 	fmt.Printf("\n")
+
 }
 
 func getK8SAPIConfig() (rest.Config) {
@@ -185,7 +192,7 @@ func createTokenK8SAPIConfig() (rest.Config) {
 	}
 
 	tlsConfig := rest.TLSClientConfig{
-		CAFile: "../cadata",
+		CAData: []byte(os.Getenv("K8S_CA_DATA")),
 	}
 
 	config := rest.Config{
@@ -207,7 +214,7 @@ func createUserPassK8SAPIConfig() (rest.Config) {
 	}
 
 	tlsConfig := rest.TLSClientConfig{
-		CAFile: "./cadata",
+		CAData: []byte(os.Getenv("K8S_CA_DATA")),
 	}
 
 	config := rest.Config{
@@ -229,8 +236,8 @@ func getCandidateServices(clientset *kubernetes.Clientset) (*v1.ServiceList, err
 
 }
 
-func getNodes(clientset *kubernetes.Clientset) (map[string]FBNode) {
-	output := make(map[string]FBNode)
+func getNodes(clientset *kubernetes.Clientset) (map[string]libflipbit.Node) {
+	output := make(map[string]libflipbit.Node)
 	var nodes *v1.NodeList
 	var err error
 
@@ -245,13 +252,13 @@ func getNodes(clientset *kubernetes.Clientset) (map[string]FBNode) {
 	}
 
 	for i := 0; i < len(nodes.Items); i++ {
-		output[nodes.Items[i].Labels["kubernetes.io/hostname"]] = FBNode{ Address: nodes.Items[i].Labels["kubernetes.io/hostname"], Services: 0}
+		output[nodes.Items[i].Labels["kubernetes.io/hostname"]] = libflipbit.Node{ Address: nodes.Items[i].Labels["kubernetes.io/hostname"], Services: 0}
 	}
 
 	return output
 }
 
-func displayNodes(nodes map[string]FBNode) {
+func displayNodes(nodes map[string]libflipbit.Node) {
 	fmt.Printf("Nodes Available \n")
 	for key, value := range nodes {
 		fmt.Printf("Hostname %s - Service Count: %d\n", key, value.Services)
@@ -259,14 +266,3 @@ func displayNodes(nodes map[string]FBNode) {
 	fmt.Printf("\n")
 }
 
-func (slice FBLBHosts) Len() int {
-	return len(slice)
-}
-
-func (slice FBLBHosts) Less(i, j int) bool {
-	return slice[i].Chance < slice[j].Chance
-}
-
-func (slice FBLBHosts) Swap(i, j int) {
-	slice[i], slice[j] = slice[j], slice[i]
-}

@@ -3,7 +3,7 @@ package libflipbit
 type Entry struct {
 	Name string
 	Namespace string
-	NodePorts []int32
+	Ports Ports
 	Hosts []string
 	LoadBalancers []string
 	Remained bool

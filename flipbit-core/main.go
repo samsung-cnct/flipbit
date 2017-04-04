@@ -72,9 +72,12 @@ func processServices(services *v1.ServiceList, entries map[string]libflipbit.Ent
 	removedList := make(map[string]libflipbit.Entry)
 
 	for i := 0; i < len(services.Items); i++ {
-		ports := make([]int32,0)
+		ports := make(libflipbit.Ports,0)
 		for j := 0; j < len(services.Items[i].Spec.Ports); j++ {
-			ports = append(ports, services.Items[i].Spec.Ports[j].NodePort)
+			ports = append(ports, libflipbit.Port{
+				NodePort:services.Items[i].Spec.Ports[j].NodePort,
+				NativePort:services.Items[i].Spec.Ports[j].Port,
+				Protocol:string(services.Items[i].Spec.Ports[j].Protocol) } )
 		}
 
 		lbLimit := 3
@@ -104,10 +107,10 @@ func processServices(services *v1.ServiceList, entries map[string]libflipbit.Ent
 			nodes[hosts[j]] = tempNode
 		}
 
-		entries[services.Items[i].Name + "|" + services.Items[i].Namespace] = libflipbit.Entry{
+		entries[services.Items[i].Name + "." + services.Items[i].Namespace] = libflipbit.Entry{
 			Name: services.Items[i].Name,
 			Namespace: services.Items[i].Namespace,
-			NodePorts: ports,
+			Ports: ports,
 			Remained: true,
 			Changed: true,
 			Hosts: hosts,
@@ -141,11 +144,11 @@ func displayServices(entries map[string]libflipbit.Entry) {
 	fmt.Printf("There are %d services in the cluster\n", len(entries))
 	for key, value := range entries {
 		fmt.Printf("Key: %s - Service name is %s, namespace is %s, ports are: ", key, value.Name, value.Namespace)
-		for i := 0; i < len(value.NodePorts); i++ {
+		for i := 0; i < len(value.Ports); i++ {
 			if i > 0 {
 				fmt.Printf(", ")
 			}
-			fmt.Printf("%d", value.NodePorts[i])
+			fmt.Printf("%d:%d Protocol: %s", value.Ports[i].NodePort, value.Ports[i].NativePort, value.Ports[i].Protocol)
 		}
 		fmt.Printf(" and hosts are: ")
 		for i := 0; i < len(value.Hosts); i++ {

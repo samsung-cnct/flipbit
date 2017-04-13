@@ -21,7 +21,7 @@ func (n *NginxStream) generateConfiguration() {
 	n.Configuration = "#flipbit realip " + n.IPAddress + "\n"
 	n.Configuration += "#flipbit service " + n.Service + "\n"
 	for _, port := range n.Ports  {
-		n.Configuration += "stream { upstream " + n.Service + "_" + strconv.Itoa(int(port.NativePort)) + "_" + port.Protocol + "_origin { least_conn; "
+		n.Configuration += "upstream " + n.Service + "_" + strconv.Itoa(int(port.NativePort)) + "_" + port.Protocol + "_origin { least_conn; "
 		for _, upstream := range n.Upstreams {
 			n.Configuration += "server " + upstream + ":" + strconv.Itoa(int(port.NodePort))
 			if port.Protocol == "UDP" {
@@ -33,7 +33,7 @@ func (n *NginxStream) generateConfiguration() {
 		if port.Protocol == "UDP" {
 			n.Configuration += " udp"
 		}
-		n.Configuration += "; proxy_pass " + n.Service + "_" + strconv.Itoa(int(port.NativePort)) + "_" + port.Protocol + "_origin; } } "
+		n.Configuration += "; proxy_pass " + n.Service + "_" + strconv.Itoa(int(port.NativePort)) + "_" + port.Protocol + "_origin; } "
 	}
 }
 

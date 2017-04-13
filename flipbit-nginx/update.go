@@ -12,12 +12,15 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"sync"
 )
 
 type Update struct {
 	AvailableIPs map[string]Service
 	Entries map[string]libflipbit.Entry
 	Services map[string]string
+
+	UpdateResult []libflipbit.LBUpdateResult
 }
 
 func (u Update) Update(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +48,14 @@ func (u Update) Update(w http.ResponseWriter, r *http.Request) {
 	u.removeLeftoverServices()
 
 	u.assignNewServices()
+
+	fmt.Printf("\nUpdate Results:\n")
+	for _, value := range u.UpdateResult {
+		fmt.Printf("Service: %s, IP Address: %s, Result: %s\n", value.Service, value.IPAddress, value.Status)
+	}
+	fmt.Printf("End of Update Results:\n\n")
+
+	u.writeResults(w,r)
 
 }
 
@@ -110,6 +121,7 @@ func (u *Update) getFiles() (map [string]string) {
 
 	return output
 }
+
 func (u *Update) getDesiredState(w http.ResponseWriter, r *http.Request) error {
 	err := json.NewDecoder(r.Body).Decode(&u.Entries)
 	if err != nil {
@@ -120,24 +132,50 @@ func (u *Update) getDesiredState(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (u *Update) verifyCurrentServices() {
+	var wg sync.WaitGroup
+	serviceKeys := make([]string, 0)
+	ipAddresses := make([]string, 0)
+
 	// Ranging over the entries
 	for serviceKey, entry := range u.Entries {
-		// Let's see if if we find a match
-		ipAddress, verifyKey := u.Services[serviceKey]
-		if verifyKey {
-			// match was found, so let's see if the configuration is unchanged
-			host := NginxStream{ Service: serviceKey, IPAddress: ipAddress, Ports: entry.Ports, Upstreams: entry.Hosts}
-			host.generateConfiguration()
-			host.generateHash()
-			if u.AvailableIPs[ipAddress].Hash != host.Hash {
-				fmt.Println("Service " + serviceKey + ", filename: " + u.AvailableIPs[ipAddress].Filename + " has changed, regenerating file")
-				u.writeStream(u.AvailableIPs[ipAddress].Filename, host.Configuration)
+		wg.Add(1)
+		go func(serviceKey string, entry libflipbit.Entry) {
+			ipAddress, reason, _ := u.matchIdenticalService(entry, serviceKey)
+			if reason == "Changed" || reason == "NoChange" {
+				u.UpdateResult = append(u.UpdateResult, libflipbit.LBUpdateResult{IPAddress: ipAddress, Service: serviceKey, Status: reason})
+				serviceKeys = append(serviceKeys, serviceKey)
+				ipAddresses = append(ipAddresses, ipAddress)
 			}
-			delete(u.Entries, serviceKey)
-			delete(u.AvailableIPs, ipAddress)
-			delete(u.Services, serviceKey)
-		}
+			wg.Done()
+		}(serviceKey, entry)
 	}
+
+	wg.Wait()
+
+	for _, serviceKey := range serviceKeys {
+		delete(u.Entries, serviceKey)
+		delete(u.Services, serviceKey)
+	}
+	for _, ipAddress := range ipAddresses {
+		delete(u.AvailableIPs, ipAddress)
+	}
+}
+
+func (u *Update) matchIdenticalService(entry libflipbit.Entry, serviceKey string) (string, string, bool) {
+	ipAddress, verifyKey := u.Services[serviceKey]
+	if verifyKey {
+		// match was found, so let's see if the configuration is unchanged
+		host := NginxStream{Service: serviceKey, IPAddress: ipAddress, Ports: entry.Ports, Upstreams: entry.Hosts}
+		host.generateConfiguration()
+		host.generateHash()
+		if u.AvailableIPs[ipAddress].Hash != host.Hash {
+			fmt.Println("Service " + serviceKey + ", filename: " + u.AvailableIPs[ipAddress].Filename + " has changed, regenerating file")
+			u.writeStream(u.AvailableIPs[ipAddress].Filename, host.Configuration)
+			return ipAddress, "Changed", true
+		}
+		return ipAddress, "NoChange", true
+	}
+	return "", "NoMatch", true
 }
 
 func (u *Update) removeLeftoverServices() {
@@ -159,27 +197,37 @@ func (u *Update) assignNewServices() {
 		}
 	}
 
-	fmt.Printf("New Services: %d, IPs Available: %d\n", len(u.Entries), len(ipAddressArray))
-
 	ipAddressIndex := 0
+	var wg sync.WaitGroup
 
 	for serviceKey, entry := range u.Entries {
-		ipAddress := ipAddressArray[ipAddressIndex]
-
-		host := NginxStream{ Service: serviceKey, IPAddress: ipAddress, Ports: entry.Ports, Upstreams: entry.Hosts}
-		host.generateConfiguration()
-		host.generateHash()
-
-		u.writeStream(serviceKey + ".conf", host.Configuration)
-		fmt.Println("Service " + serviceKey + ", filename: " + serviceKey + ".conf was created!")
-
-
-		ipAddressIndex++
 		if ipAddressIndex >= len(ipAddressArray) {
 			fmt.Println("Too many services, not enough IPs.  Ditching service -->" + serviceKey + "<--")
-			return
+			u.UpdateResult = append(u.UpdateResult, libflipbit.LBUpdateResult{IPAddress: "none", Service: serviceKey, Status: "Cannot Assign IP"})
+			continue
 		}
+		ipAddress := ipAddressArray[ipAddressIndex]
+		ipAddressIndex++
+
+		wg.Add(1)
+		go func(serviceKey string, ipAddress string, ports libflipbit.Ports, upstreams []string) {
+			defer wg.Done()
+			u.createNewService(serviceKey, ipAddress, ports, upstreams)
+			u.UpdateResult = append(u.UpdateResult, libflipbit.LBUpdateResult{IPAddress: ipAddress, Service: serviceKey, Status: "Created"})
+		}(serviceKey, ipAddress, entry.Ports, entry.Hosts)
 	}
+	wg.Wait()
+}
+
+func (u *Update) createNewService(serviceKey string, ipAddress string, ports libflipbit.Ports, upstreams []string) bool {
+	host := NginxStream{ Service: serviceKey, IPAddress: ipAddress, Ports: ports, Upstreams: upstreams}
+	host.generateConfiguration()
+	host.generateHash()
+
+	u.writeStream(serviceKey + ".conf", host.Configuration)
+	fmt.Println("Service " + serviceKey + ", filename: " + serviceKey + ".conf was created!")
+
+	return true
 }
 
 func (u Update) writeStream(filename string, configuration string) {
@@ -187,6 +235,17 @@ func (u Update) writeStream(filename string, configuration string) {
 	fmt.Printf("Writing out -->%s<-- to -->%s<--\n", configuration, filename)
 	err := ioutil.WriteFile(u.getFullFilePath(filename), []byte(configuration), 0644)
 	u.fileError(err)
+}
+
+func (u Update) writeResults(w http.ResponseWriter, r *http.Request) {
+	js, err := json.Marshal(u.UpdateResult)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(js)
 }
 
 func (u Update) getFullFilePath(filename string) string {

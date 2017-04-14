@@ -26,7 +26,7 @@ centrally-run program.
   * Based on the information returned by the load balancers, a DNS server can be updated with the 
   load balancer-provided IP addresses for any given service
 * flipbit-nginx ([documentation](flipbit-nginx/README.md))
-  * `flipbit-nginx` is a program that will maintain stream configuratino for a nginx server.
+  * `flipbit-nginx` is a program that will maintain stream configuration for a nginx server.
   
 ![Flipbit Traffic](documentation/images/loadbalancing.png)
 
@@ -42,10 +42,10 @@ A load balancer host is a machine that is put into service to handle service tra
 users/clients.  This machine should have multiple IP addresses bound to it and the ability to hand them out as needed 
 to kubernetes services.
 
-Load balancers will forward TCP or UDP connections form external clients to a pool of upstream servers.  Not all load 
+Load balancers will forward TCP or UDP connections from external clients to a pool of upstream servers.  Not all load 
 balancing software is the same, for example, some do not support UDP.
 
-It is presumed that there is already knowledge of how to operate load balancing software.  flipbit will create the 
+It is presumed that there is already knowledge of how to operate load balancing software.  Flipbit will create the 
 configurations as needed and help coordinate hot-restarts (where possible) of the load balancing software, but 
 flipbit does not directly run the load balancing software
 
